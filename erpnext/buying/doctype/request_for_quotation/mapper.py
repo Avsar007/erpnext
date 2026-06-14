@@ -12,10 +12,22 @@ from erpnext.accounts.party import _get_party_details, get_party_account_currenc
 from erpnext.stock.doctype.material_request.mapper import set_missing_values
 
 
+def set_cost_center_from_material_request_item(target):
+	# RFQ Item has no cost_center field; fetch it from the linked Material Request Item.
+	if target.material_request_item:
+		target.cost_center = frappe.db.get_value(
+			"Material Request Item", target.material_request_item, "cost_center"
+		)
+
+
 @frappe.whitelist()
 def make_supplier_quotation_from_rfq(
 	source_name: str, target_doc: str | Document | None = None, for_supplier: str | None = None
 ):
+	def update_item(obj, target, source_parent):
+		# Desk flow (RFQ → Supplier Quotation): map line-wise cost center before set_missing_values.
+		set_cost_center_from_material_request_item(target)
+
 	def postprocess(source, target_doc):
 		if for_supplier:
 			target_doc.supplier = for_supplier
@@ -44,6 +56,7 @@ def make_supplier_quotation_from_rfq(
 					"parent": "request_for_quotation",
 					"project_name": "project",
 				},
+				"postprocess": update_item,
 			},
 		},
 		target_doc,
@@ -122,6 +135,13 @@ def create_rfq_items(sq_doc, supplier, data):
 			),
 		}
 	)
+
+	# Portal flow (supplier submits quotation via RFQ portal): create_rfq_items does not use
+	# get_mapped_doc postprocess, so fetch line-wise cost center from Material Request Item here.
+	if data.material_request_item:
+		args["cost_center"] = frappe.db.get_value(
+			"Material Request Item", data.material_request_item, "cost_center"
+		)
 
 	sq_doc.append("items", args)
 
